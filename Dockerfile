@@ -1,37 +1,31 @@
-FROM debian:jessie
+FROM debian:buster
 
-ENV LANG en_US.UTF-8
-ENV LANGUAGE en_US:en
-ENV LC_ALL en_US.UTF-8
+ARG DEBIAN_FRONTEND=noninteractive
+ARG OPENXPKI_NOCONFIG=1
 
 RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y wget && \
-    wget http://packages.openxpki.org/debian/Release.key -O - | apt-key add - && \
-    echo "deb http://packages.openxpki.org/debian/ jessie release" > /etc/apt/sources.list.d/openxpki.list && \
-    echo "deb http://httpredir.debian.org/debian jessie non-free" >> /etc/apt/sources.list && \
-    apt-get update && \
-    apt-get install -y locales && \
-    echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && \
-    locale-gen && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y \
-      libdbd-mysql-perl \
-      libapache2-mod-rpaf \
-      libapache2-mod-fcgid \
-      libopenxpki-perl \
-      openxpki-i18n \
-      openca-tools \
-      mysql-client && \
-    a2enmod fcgid && \
-    a2enmod rpaf && \
-    a2dismod status && \
-    apt-get remove -y wget && \
-    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    apt-get install --assume-yes gpg libdbd-mysql-perl libapache2-mod-fcgid apache2 wget locales less gettext
 
-ADD configs/apache2/mods-enabled/rpaf.conf /etc/apache2/mods-enabled/rpaf.conf
+RUN echo "en_US.UTF-8 UTF-8" > /etc/locale.gen && dpkg-reconfigure --frontend=noninteractive locales
+RUN wget https://packages.openxpki.org/v3/debian/openxpki.list -O /etc/apt/sources.list.d/openxpki.list
+RUN wget https://packages.openxpki.org/v3/debian/Release.key -O - | apt-key add -
+RUN apt-get update && apt-get install --assume-yes libopenxpki-perl openxpki-i18n openxpki-cgi-session-driver libcrypt-libscep-perl libscep
+RUN apt-get clean
 
-ADD scripts/docker-entrypoint.sh /
-RUN chmod 755 /docker-entrypoint.sh
+ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
+VOLUME /var/log/openxpki /etc/openxpki
+WORKDIR /var/log/openxpki/
+RUN ln -s /etc/openxpki/contrib/apache2-openxpki.conf /etc/apache2/conf-enabled/
+RUN a2dissite 000-default; a2disconf serve-cgi-bin
+RUN ln -s /etc/openxpki/contrib/apache2-openxpki-site.conf /etc/apache2/sites-enabled/
+RUN a2enmod cgid fcgid headers rewrite ssl
+COPY bin/setup-cert.sh /usr/bin/setup-cert
+RUN chmod +x /usr/bin/setup-cert
+COPY bin/start-apache.sh /usr/bin/start-apache
+RUN chmod +x /usr/bin/start-apache
+COPY bin/update-i18n.sh /usr/bin/update-i18n
+RUN chmod +x /usr/bin/update-i18n
 
-VOLUME ["/etc/openxpki"]
+CMD ["/usr/bin/openxpkictl","start","--no-detach"]
 
-ENTRYPOINT ["/docker-entrypoint.sh"]
+EXPOSE 80 443

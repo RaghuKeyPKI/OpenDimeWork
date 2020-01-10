@@ -1,140 +1,66 @@
-# OpenXPKI Docker Template
+# OpenXPKI@docker
 
-This repository contains a template for running OpenXPKI with the official debian packages. 
-We also provide a docker-compose.yml for easy startup and management. 
-This container is supposed to run behind an nginx reverse-proxy to provide https, 
-therefore we provide a tested nginx configuration example.
+## Using Docker Compose
 
-This container is designed to run with MySql but can be changed to use other database systems.
+The provided docker-compose provided creates three containers:
 
-# Quickstart
+- Database (based on mysql:5.7)
+- OpenXPKI Server
+- OpenXPKI WebUI
 
-A quickstart can be used for testing as it contains everything that is needed.
-This docker-compose contains default credentials for the database, that can be changed.
-When starting the containers with docker-compose up, a database container is created and linked to openxpki as mysql.
-The OpenXPKI sampleconfig.sh will be called after the database has been created and initialized.
+Before running compose you **MUST** place a configuration directory named `openxpki-config` in the current directory, the easiest way is to clone the branch `docker` from the `openxpki-config` repository at github.
 
-    git clone https://github.com/DimeOne/docker-openxpki.git
-    cd docker-openxpki
-    docker-compose up -d && docker-compose logs -f
-    
-Start browser and navigate to http://127.0.0.1:8080/openxpki
+```bash
+$ git clone https://github.com/openxpki/openxpki-config.git --branch=docker
+$ docker-compose  up 
+```
 
-# Userdata
+If you dont provide a TLS certificate for the webserver yourself (see below), the init script creates a self-signed one and exposes the webserver UI on port 8443 (`https://localhost:8443/openxpki/`). The SCEP and RPC interface is available via plain HTTP on port 8080 (`http://localhost:8080`). The system is started with the configuration found in the openxpki-config path, without tokens installed! Place your keys and certificates into the `ca` directory of the config directory and follow the instructions given in the quickstart tutorial: https://openxpki.readthedocs.io/en/latest/quickstart.html#setup-base-certificates.
 
-All userdata is either stored in the MySql database or as files in the openxpki configuration. When using the docker-compose.yml, 
-all folders, including configuration, logs and MySql database files are stored as folders in the same directory as the docker-compose.yml.
+## Prebuilt images
 
-  - mysql_data
-  - config
-  - logs
+Prebuilt images for the official releases are provided by WhiteRabbitSecurity via a public Docker repository `whiterabbitsecurity/openxpki3`. 
 
-# Configuration
+Those are also used by the docker-compose file.
 
-There are three parts of configuration that have to be considered. But will be created using defaults if not changed.
+## Building your own images
 
-## Database configuration
+The Dockerfile creates a container based on Debian Jessie using prebuilt deb packages which are downloaded from the OpenXPKI package mirror (https://packages.openxpki.org).
 
-This container is designed to run alongside a mysql container or atleast have the connection details configured using environment variables.
-When using the docker-compose.yml, valid default values will be supplied, but should be changed before starting the containers the first time.
+The image has all code components installed but comes without any configuration.
 
-  - APP_DB_NAME=openxpki
-  - APP_DB_HOST=mysql
-  - APP_DB_PORT=3306
-  - APP_DB_USER=openxpki
-  - APP_DB_PASS=openxpki
-  - APP_DB_ROOT_PASS=super-secret-password
+The easiest way to start is to clone the `docker` branch from the openxpki-config repository from github `https://github.com/openxpki/openxpki-config` and mount it to `/etc/openxpki`.
 
-The mysql port does not have to be exported when linked.
+As the container comes without a database engine installed, you must setup a database container yourself and put the connection details into `config.d/system/database.yaml`.
 
-When these variables are set, values in database.yml will be overwritten by these.
+### WebUI
 
-APP_DB_ROOT_PASS is only required when creating a dabatase and can be omitted if the database already exists.
+The container runs only the OpenXPKI daemon but not the WebUI frontend. You can either start apache inside the container or create a second container from the same image that runs the UI. In this case you must create a shared volume for the communication socket mounted at `/var/openxpki/` (this will be changed to (`/run/openxpki/` with one of the next releases!).
 
-## PKI configuration
+## Helpers
 
-The configuration of the pki is done within /etc/openxpki.
+### Automatic import of certificates
 
-If this folder doesn't contain a config.d folder, new example configuration files will be extracted to this directory.
+Start the server container and run `setup-cert` to setup the CA certificates and matching keys. The artifacts need to be placed in `openxpki-config/ca/[REALM]/` and file names must match one of the following patterns (case insensitive):
 
-When this container is started without parameters and no .initiated file in the config folder,
-the default [sampleconfig.sh][2] will be run oncec to create and import new certificates.
-The script [sampleconfig.sh][2] may be fine when running a demo but should be edited before being used in production.
+`root(-XX).crt` for root certificates
+`ca-signer(-XX).crt` for signer certificates
+`vault(-XX).crt` for vault certificates
+`scep(-XX).crt` for vault certificates
 
-To use a custom sampleconfig.sh, just create a customconfig.sh in the configuration directory, that will be called instead.
+The suffix -XX must contain only numbers and is used as generation identifier on import. If the suffix is omitted, the certificate is imported with the next available generation identifier. The corresponding key files must have the same basename with file ending (*.pem), the key file is copied to $alias.pem so it will be found by the default key specification of the sample config (if the file already exists, nothing is copied).
 
-These files are used to configure OpenXPKI, consult [the OpenXPKI manual][1] for further information.
+Certificates/keys for data vault can also be placed in `openxpki-config/ca/`. Then, the startup script will detect it and create aliases for all realms.
 
-## Nginx configuration
+All key files (except for data vault) are stored in the database so make sure all other tokens (e.g. certsign) are configured correctly:
+```yaml
+    key_store: DATAPOOL
+    key: "[% ALIAS %]"
+```
 
-This container has no https configuration and is expected to be run behind an nginx reverse-proxy.
+### Automatic setup of custom translations
 
-An example configuration may be found within this repository at configs/nginx/openxpki
+Translations are done using gettext. By default the container comes with a file that covers translations of the sample config and the backend. If you need to modify or extend the translations, you must generate your own po file.
 
-# Running & Commands
+Create a folder `openxpki-config/i18n/en_US` and place your overrides/extensions in one or muliple files ending with `.po`. When you need to update the internal translations, either create a file `openxpki-config/i18n/.update` (can be empty) or run `update-i18n` inside the **client** container. The script will merge the contents of `contrib/i18n/` with your local extensions, so make sure you update this when you install a new release. You need to restart the client container afterwards to pull in the new translation file.
 
-This container is expected to be linked to a MySql server or have the connection details passed through environment variables.
-
-**The following commands can be used to access specific setup steps directly, by launching the container with the following commands:**
-
-## create_db
-
-Creates a new database from the given environment variables. Requires MySql root password to be set.
-
-## init_db
-
-Initiate the database with the mysql schema provided by openxpki.
-
-## create_certs
-
-Create certificates from sampleconfig.sh or customconfig.sh
-
-## wait_for_db
-
-Wait for a succesful database connection using credentials from environment variables.
-
-## wait_for_db_root
-
-Wait for a succesful database connection using root and credentials from environment variables.
-
-## run
-
-Run the Servers.
-
-## version
-
-Show the versions of the used tools.
-
-# Environment Variables:
-
-  - APP_DB_NAME = openxpki
-  - APP_DB_HOST = mysql
-  - APP_DB_PORT = 3306
-  - APP_DB_USER = openxpki
-  - APP_DB_PASS = openxpki
-  - APP_DB_ROOT_PASS = super-secret-password
-
-
-# ToDo:
-
-  - So much documentation.
-  - Generalize configuration for other dbs?
-
-
-# Known Issues:
-  - Unable to run openxpki start --foreground properly
-    - See: https://github.com/openxpki/openxpki/issues/538
-    - might cause problems with process reaping and leave zombies
-    - prevents running the processes through an external supervisor like s6 or supervisord
-
-# Sources:
-  - [OpenXPKI manual][1]
-  - [OpenXPKI sampleconfig.sh][2]
-  - [OpenXPKI Official Repository][3]
-  - [OpenXPKI Docker container template by jetpulp][4]
-
-
-[1]: http://openxpki.readthedocs.io/en/latest/ (OpenXPKI manual)
-[2]: https://github.com/openxpki/openxpki/blob/develop/config/sampleconfig.sh (OpenXPKI latest sampleconfig.sh)
-[3]: https://github.com/openxpki/openxpki (OpenXPKI Official Repository)
-[4]: https://github.com/jetpulp/docker-openxpki (OpenXPKI Docker Container by jetpulp)
