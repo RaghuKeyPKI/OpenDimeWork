@@ -1,25 +1,46 @@
-db:
-  image: mysql:5.5
-  restart: always
-  volumes:
-    - ./mysql-data:/var/lib/mysql
-  environment:
-    - MYSQL_ROOT_PASSWORD=my-super-secret-password
-web:
-  image: dime/openxpki:latest
-  dns: 8.8.8.8
-  hostname: pki.example.org
-  restart: always
-  ports:
-    - "127.0.0.1:8080:80"
-  links:
-    - db:mysql
-  volumes:
-    - ./config:/etc/openxpki
-    - ./logs/apache2:/var/log/apache2
-    - ./logs/openxpki:/var/log/openxpki
-  environment:
-    - APP_DB_NAME=openxpki
-    - APP_DB_USER=openxpki
-    - APP_DB_PASS=openxpki
-    - APP_DB_ROOT_PASS=my-super-secret-password
+version: "3"
+
+services:
+  db:
+#    restart: always
+    image: mysql:5.7
+    command: --default-authentication-plugin=mysql_native_password
+    volumes:
+      - openxpkidb:/var/lib/mysql
+      - ./openxpki-config/contrib/sql/schema-mysql.sql:/docker-entrypoint-initdb.d/schema-mysql.sql
+    environment:
+      MYSQL_DATABASE: openxpki
+      MYSQL_USER: openxpki
+      MYSQL_PASSWORD: openxpki 
+      MYSQL_ROOT_PASSWORD: topsecret
+
+  openxpki-server:
+#    restart: always
+    image: whiterabbitsecurity/openxpki3
+    command: /usr/bin/openxpkictl start --no-detach
+    volumes:
+      - ./openxpki-config:/etc/openxpki
+      - openxpkilog:/var/log/openxpki
+      - openxpkisocket:/var/openxpki/
+    depends_on:
+        - db
+
+  openxpki-client:
+#    restart: always
+    image: whiterabbitsecurity/openxpki3
+    command: /usr/bin/start-apache
+    ports:
+      - "8080:80/tcp"
+      - "8443:443/tcp"
+    volumes:
+      - ./openxpki-config:/etc/openxpki
+      - openxpkilog:/var/log/openxpki
+      - openxpkisocket:/var/openxpki/
+    depends_on:
+        - openxpki-server
+
+volumes:
+  openxpkidb:
+  openxpkisocket:
+  openxpkilog:
+
